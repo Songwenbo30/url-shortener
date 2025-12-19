@@ -4,31 +4,32 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.orm import sessionmaker
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from core.setting import settings
+from app.core.setting import settings
+
 
 engine = create_async_engine(
     settings.PG_DSN,
-    echo=True,
+    pool_size=20,
+    max_overflow=80,
+    pool_timeout=30,
 )
 
 
-def create_async_session():
-    return sessionmaker(
-        bind=engine,
-        autocommit=False,
-        autoflush=False,
-        expire_on_commit=False,
-        class_=AsyncSession,
-    )
+SessionFactory = sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
+
+
+def create_async_session() -> sessionmaker:
+    return SessionFactory
 
 
 async def get_session() -> AsyncGenerator[AsyncSession, None]:
-    async_session = create_async_session()
-    async with async_session() as session:
+    async with SessionFactory() as session:
         try:
             yield session
-        except Exception as e:
+        except Exception:
             await session.rollback()
-            raise e
-        finally:
-            await session.close()
+            raise

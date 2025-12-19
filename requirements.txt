@@ -7,3 +7,6 @@ sqlalchemy
 alembic
 uvicorn
 pytest
+httpx
+pytest-asyncio
+testcontainers[postgres]
