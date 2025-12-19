@@ -75,7 +75,6 @@ async def _process_batch(batch: list[dict]):
             for visit in batch:
                 session.add(URLVisit(**visit))
 
-            # Aggregate total_visits
             counts = {}
             for visit in batch:
                 counts[visit["short_url_id"]] = counts.get(visit["short_url_id"], 0) + 1

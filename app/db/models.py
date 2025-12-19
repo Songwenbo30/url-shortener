@@ -7,7 +7,7 @@ class ShortURL(SQLModel, table=True):
     __tablename__ = "short_urls"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    original_url: str = Field(index=True)  # Index for faster search if needed
+    original_url: str = Field(index=True)
     short_code: str = Field(unique=True, index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     total_visits: int = Field(default=0)
