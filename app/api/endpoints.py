@@ -16,11 +16,30 @@ router = APIRouter()
 
 class URLCreate(BaseModel):
     url: HttpUrl
+    custom_alias: str | None = None  # 新增：可选字段
 
     @field_validator("url", mode="after")
     @classmethod
     def normalize(cls, v: HttpUrl) -> str:
         return str(v).rstrip("/")
+
+    @field_validator("custom_alias", mode="after")
+    @classmethod
+    def validate_alias(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        # 去掉首尾空白
+        v = v.strip()
+        if not v:
+            return None
+        # 长度校验：3-20 字符
+        if len(v) < 3 or len(v) > 20:
+            raise ValueError("custom_alias must be between 3 and 20 characters")
+        # 字符白名单：只允许字母、数字、连字符、下划线
+        import re
+        if not re.match(r"^[a-zA-Z0-9_-]+$", v):
+            raise ValueError("custom_alias can only contain letters, digits, hyphens and underscores")
+        return v
 
 
 class URLResponse(BaseModel):
@@ -44,21 +63,23 @@ async def create_short_url(
     request: Request,
     session: AsyncSession = Depends(get_session),
 ):
+    # 1. 幂等检查：已存在直接返回
     stmt = select(ShortURL).where(ShortURL.original_url == payload.url)
     result = await session.exec(stmt)
-    short_url = result.first()
+    existing = result.first()
 
-    if short_url:
+    if existing:
         base_url = str(request.base_url).rstrip("/")
         return URLResponse(
-            short_code=short_url.short_code,
-            original_url=short_url.original_url,
-            short_url=f"{base_url}/{short_url.short_code}",
+            short_code=existing.short_code,
+            original_url=existing.original_url,
+            short_url=f"{base_url}/{existing.short_code}",
         )
 
-    max_retries = 5
-    for retry in range(max_retries):
-        code = generate_short_code(payload.url)
+    # 2. URL 不存在，创建新记录
+    if payload.custom_alias:
+        # 用用户指定的 alias
+        code = payload.custom_alias
         short_url = ShortURL(
             original_url=payload.url,
             short_code=code,
@@ -67,11 +88,30 @@ async def create_short_url(
         try:
             await session.commit()
             await session.refresh(short_url)
-            break
         except IntegrityError:
             await session.rollback()
-            if retry == max_retries - 1:
-                raise HTTPException(status_code=500, detail="Failed to generate unique short code")
+            raise HTTPException(
+                status_code=409,
+                detail=f"Short code '{code}' is already taken"
+            )
+    else:
+        # 自动生成 + 重试
+        max_retries = 5
+        for retry in range(max_retries):
+            code = generate_short_code(payload.url)
+            short_url = ShortURL(
+                original_url=payload.url,
+                short_code=code,
+            )
+            session.add(short_url)
+            try:
+                await session.commit()
+                await session.refresh(short_url)
+                break
+            except IntegrityError:
+                await session.rollback()
+                if retry == max_retries - 1:
+                    raise HTTPException(status_code=500, detail="Failed to generate unique short code")
 
     base_url = str(request.base_url).rstrip("/")
     return URLResponse(
