@@ -5,8 +5,8 @@ services:
     container_name: url_shortener_db
     restart: always
     environment:
-      - POSTGRES_USER={PG_USER}
-      - POSTGRES_PASSWORD={PG_PASSWORD}
-      - POSTGRES_DB={PG_DB}
+      - POSTGRES_USER=${PG_USER}
+      - POSTGRES_PASSWORD=${PG_PASSWORD}
+      - POSTGRES_DB=${PG_DB}
     ports:
       - "5432:5432"
