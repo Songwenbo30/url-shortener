@@ -5,6 +5,7 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy.exc import IntegrityError
 from app.utils.visit_queue import enqueue_visit
+from datetime import datetime, timedelta
 
 
 from app.db.models import ShortURL
@@ -16,7 +17,8 @@ router = APIRouter()
 
 class URLCreate(BaseModel):
     url: HttpUrl
-    custom_alias: str | None = None  # 新增：可选字段
+    custom_alias: str | None = None  # 新增:可选字段
+    expires_in_days: int | None = None  # 新增:几天后过期，None 表示永不过期
 
     @field_validator("url", mode="after")
     @classmethod
@@ -28,17 +30,21 @@ class URLCreate(BaseModel):
     def validate_alias(cls, v: str | None) -> str | None:
         if v is None:
             return None
-        # 去掉首尾空白
         v = v.strip()
         if not v:
             return None
-        # 长度校验：3-20 字符
         if len(v) < 3 or len(v) > 20:
             raise ValueError("custom_alias must be between 3 and 20 characters")
-        # 字符白名单：只允许字母、数字、连字符、下划线
         import re
         if not re.match(r"^[a-zA-Z0-9_-]+$", v):
             raise ValueError("custom_alias can only contain letters, digits, hyphens and underscores")
+        return v
+
+    @field_validator("expires_in_days", mode="after")
+    @classmethod
+    def validate_expires_in_days(cls, v: int | None) -> int | None:
+        if v is not None and v <= 0:
+            raise ValueError("expires_in_days must be a positive integer")
         return v
 
 
@@ -63,6 +69,11 @@ async def create_short_url(
     request: Request,
     session: AsyncSession = Depends(get_session),
 ):
+    # 新增：计算过期时间
+    expires_at = None
+    if payload.expires_in_days:
+        expires_at = datetime.utcnow() + timedelta(days=payload.expires_in_days)
+
     # 1. 幂等检查：已存在直接返回
     stmt = select(ShortURL).where(ShortURL.original_url == payload.url)
     result = await session.exec(stmt)
@@ -78,11 +89,11 @@ async def create_short_url(
 
     # 2. URL 不存在，创建新记录
     if payload.custom_alias:
-        # 用用户指定的 alias
         code = payload.custom_alias
         short_url = ShortURL(
             original_url=payload.url,
             short_code=code,
+            expires_at=expires_at,
         )
         session.add(short_url)
         try:
@@ -95,13 +106,13 @@ async def create_short_url(
                 detail=f"Short code '{code}' is already taken"
             )
     else:
-        # 自动生成 + 重试
         max_retries = 5
         for retry in range(max_retries):
             code = generate_short_code(payload.url)
             short_url = ShortURL(
                 original_url=payload.url,
                 short_code=code,
+                expires_at=expires_at,
             )
             session.add(short_url)
             try:
@@ -133,6 +144,10 @@ async def redirect(
 
     if not short_url:
         raise HTTPException(status_code=404, detail="URL not found")
+
+        # 新增:过期判断
+    if short_url.expires_at and short_url.expires_at <= datetime.utcnow():
+        raise HTTPException(status_code=410, detail="URL has expired")
 
     client_ip = request.client.host if request.client else "unknown"
     await enqueue_visit(short_url.id, client_ip)

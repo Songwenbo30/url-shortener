@@ -26,6 +26,12 @@ This project is a fork of [mhhasani/url-shortener](https://github.com/mhhasani/u
 - Fully backward compatible: omit `custom_alias` to use auto-generation
 - Covered by 5 new integration tests
 
+### TTL Expiration
+- Added optional `expires_in_days` field to the shorten endpoint
+- Expired URLs return **410 Gone** on redirect
+- Uses Alembic migration to add `expires_at` column
+- Backward compatible: omit field for permanent URLs
+
 ---
 
 ## ⚡ Scalability Highlights

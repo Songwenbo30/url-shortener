@@ -11,6 +11,7 @@ class ShortURL(SQLModel, table=True):
     short_code: str = Field(unique=True, index=True)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     total_visits: int = Field(default=0)
+    expires_at: datetime | None = Field(default=None, index=True)  # 新增
 
     visits: List["URLVisit"] = Relationship(back_populates="short_url")
 
