@@ -1,7 +1,8 @@
 import pytest
 from sqlmodel import select
-from app.db.models import ShortURL
 from datetime import datetime, timedelta
+from app.db.session import create_async_session
+from app.db.models import ShortURL
 
 
 @pytest.mark.anyio
@@ -20,11 +21,7 @@ async def test_create_with_ttl(client):
 
 @pytest.mark.anyio
 async def test_expired_url_returns_410(client):
-    """创建一个已经过期的短链（expires_in_days=0 不允许，用负数也不行）
-    改为：直接通过数据库构造一个过期记录"""
-    from app.db.session import create_async_session
-    from app.db.models import ShortURL
-
+    """正常创建短链后，直接修改数据库将 expires_at 设为过去时间，验证访问返回 410"""
     # 先正常创建一个
     resp = await client.post(
         "/shorten",

@@ -3,12 +3,13 @@
 A scalable and high-performance URL shortening service built with **FastAPI**, **SQLModel**, **PostgreSQL**, and **Alembic**, designed to handle high concurrency while keeping a maintainable and modular codebase.
 
 This project is a fork of [mhhasani/url-shortener](https://github.com/mhhasani/url-shortener), extended with additional features for learning and resume purposes.
+
 ---
 
 ## 🧩 Features
 
-* **Create short URLs** – `POST /shorten`(with optional custom alias)
-* **Redirect to original URLs** – `GET /r/{short_code}`
+* **Create short URLs** – `POST /shorten`(with optional custom alias and TTL expiration)
+* **Redirect to original URLs** – `GET /r/{short_code}`(returns 410 Gone if expired)
 * **Track visit statistics** – `GET /stats/{short_code}`
 * **Async queue-based visit processing** for high concurrency
 * **Connection pooling** for PostgreSQL
@@ -28,9 +29,10 @@ This project is a fork of [mhhasani/url-shortener](https://github.com/mhhasani/u
 
 ### TTL Expiration
 - Added optional `expires_in_days` field to the shorten endpoint
+- Model adds nullable `expires_at` column (NULL = never expires)
 - Expired URLs return **410 Gone** on redirect
-- Uses Alembic migration to add `expires_at` column
-- Backward compatible: omit field for permanent URLs
+- Alembic migration adds column + index on `expires_at`
+- 5 new tests covering creation, expiration, default no-expiry, invalid input, stats still accessible
 
 ---
 
@@ -120,8 +122,11 @@ Tests cover:
 * URL creation and redirection
 * Idempotent URL shortening
 * **Custom alias creation, conflict (409), and validation (422)**
+* **TTL expiration: 410 Gone on expired URLs, default no-expiry, invalid input (422)**
 * Visit tracking under high concurrency
 * Validation of invalid URLs
+
+Total: **16 tests** (6 original + 5 custom alias + 5 TTL)
 
 ---
 
@@ -153,6 +158,14 @@ app/
 * Reuses existing `short_code` column and unique constraint — no schema change needed
 * Conflict returns HTTP 409 instead of 500 for clear API semantics
 
+### TTL Expiration
+
+* Optional `expires_in_days` field validated via Pydantic (positive integer)
+* Model adds nullable `expires_at` column — `NULL` means never expires
+* Expired URLs return HTTP **410 Gone** on redirect (semantically correct: resource existed but is no longer available)
+* Lazy cleanup: expiration is checked at access time; no background cleanup job needed for current scale
+* Alembic migration adds column + index on `expires_at` for query efficiency
+
 ### Connection Pooling
 
 * Async engine with pool size and overflow configured
@@ -171,4 +184,4 @@ app/
 * Visit counting is minimal; timestamps, user-agent, and geo-tracking can be added
 * Focus on modularity and maintainability; background tasks handle heavy workloads
 * Main request path is lightweight; batch processing, logging, and analytics happen in background tasks
-* Custom alias is purely additive — all existing behavior unchanged
+* * Both extensions (custom alias and TTL) are purely additive — all existing behavior remains unchanged when optional fields are omitted
