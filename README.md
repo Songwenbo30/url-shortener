@@ -2,25 +2,29 @@
 
 A scalable and high-performance URL shortening service built with **FastAPI**, **SQLModel**, **PostgreSQL**, and **Alembic**, designed to handle high concurrency while keeping a maintainable and modular codebase.
 
-This project is part of an interview/technical assessment, showcasing:
-
-* Clean architecture and modular code
-* Async and batch-based visit tracking for scalability
-* Connection pooling and async DB access
-* Logging, observability, and queue-based processing
-* Unit tests and high-concurrency handling
-
+This project is a fork of [mhhasani/url-shortener](https://github.com/mhhasani/url-shortener), extended with additional features for learning and resume purposes.
 ---
 
 ## 🧩 Features
 
-* **Create short URLs** – `POST /shorten`
+* **Create short URLs** – `POST /shorten`(with optional custom alias)
 * **Redirect to original URLs** – `GET /r/{short_code}`
 * **Track visit statistics** – `GET /stats/{short_code}`
 * **Async queue-based visit processing** for high concurrency
 * **Connection pooling** for PostgreSQL
 * **Custom async logging middleware** for observability
 * **Flushable visit queue** for testing and shutdown safety
+
+---
+
+## 🚀 My Extensions
+
+### Custom Alias Support
+- Added optional `custom_alias` field to the shorten endpoint
+- Pydantic validator enforces 3-20 char length and whitelist (letters, digits, hyphens, underscores)
+- Database unique constraint + IntegrityError handling returns **409 Conflict** on collision
+- Fully backward compatible: omit `custom_alias` to use auto-generation
+- Covered by 5 new integration tests
 
 ---
 
@@ -48,7 +52,7 @@ This project is part of an interview/technical assessment, showcasing:
 ### 1️⃣ Clone the repository
 
 ```bash
-git clone https://github.com/mhhasani/url-shortener.git
+git clone https://github.com/Songwenbo30/url-shortener.git
 cd url-shortener
 ```
 
@@ -109,6 +113,7 @@ Tests cover:
 
 * URL creation and redirection
 * Idempotent URL shortening
+* **Custom alias creation, conflict (409), and validation (422)**
 * Visit tracking under high concurrency
 * Validation of invalid URLs
 
@@ -136,6 +141,12 @@ app/
 * Background worker `visit_worker()` processes visits in batches (`BATCH_SIZE` / `BATCH_INTERVAL`)
 * `_process_batch` inserts visit records and updates `ShortURL.total_visits` atomically
 
+### Custom Alias
+
+* Optional `custom_alias` field validated via Pydantic (length + character whitelist)
+* Reuses existing `short_code` column and unique constraint — no schema change needed
+* Conflict returns HTTP 409 instead of 500 for clear API semantics
+
 ### Connection Pooling
 
 * Async engine with pool size and overflow configured
@@ -154,3 +165,4 @@ app/
 * Visit counting is minimal; timestamps, user-agent, and geo-tracking can be added
 * Focus on modularity and maintainability; background tasks handle heavy workloads
 * Main request path is lightweight; batch processing, logging, and analytics happen in background tasks
+* Custom alias is purely additive — all existing behavior unchanged
