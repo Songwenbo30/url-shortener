@@ -1,5 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, HttpUrl, field_validator
 from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -10,6 +9,10 @@ from app.utils.visit_queue import enqueue_visit
 from app.db.models import ShortURL
 from app.db.session import get_session
 from app.utils.shortcode_generator import generate_short_code
+from datetime import datetime
+from fastapi import HTTPException, Request
+from fastapi.responses import RedirectResponse
+from app.core.redis import get_cached_url, set_cached_url, delete_cached_url
 
 router = APIRouter()
 
@@ -113,6 +116,9 @@ async def create_short_url(
                 if retry == max_retries - 1:
                     raise HTTPException(status_code=500, detail="Failed to generate unique short code")
 
+    # 新增：创建成功后预热缓存KEYS *
+    await set_cached_url(short_url.short_code, short_url.original_url)
+
     base_url = str(request.base_url).rstrip("/")
     return URLResponse(
         short_code=short_url.short_code,
@@ -127,12 +133,38 @@ async def redirect(
     request: Request,
     session: AsyncSession = Depends(get_session),
 ):
+    # 1.先查Redis缓存
+    cached_url = await get_cached_url(short_code)
+    if cached_url:
+        # 缓存命中：查 DB 拿 id 用于统计（只查 id，不查整行）
+        stmt = select(ShortURL.id).where(ShortURL.short_code == short_code)
+        result = await session.exec(stmt)
+        url_id = result.first()
+        if url_id:
+            client_ip = request.client.host if request.client else "unknown"
+            await enqueue_visit(url_id, client_ip)
+        return RedirectResponse(url=cached_url)
+
+    # 2.缓存未命中，查数据库
     stmt = select(ShortURL).where(ShortURL.short_code == short_code)
     result = await session.exec(stmt)
     short_url = result.first()
 
     if not short_url:
         raise HTTPException(status_code=404, detail="URL not found")
+
+    # 3.过期判断
+    if short_url.expires_at and short_url.expires_at <= datetime.utcnow():
+        # 已过期：主动删缓存
+        await delete_cached_url(short_code)
+        raise HTTPException(status_code=410, detail="URL has expired")
+
+    # 4. 未过期：写入缓存 + 重定向 + 统计
+    await set_cached_url(short_code, short_url.original_url)
+
+    # 默认 TTL=300s，如果想动态计算：
+    # ttl = int((short_url.expires_at - datetime.utcnow()).total_seconds()) if short_url.expires_at else 300
+    # await set_cached_url(short_code, short_url.original_url, ttl=max(ttl, 60))
 
     client_ip = request.client.host if request.client else "unknown"
     await enqueue_visit(short_url.id, client_ip)
