@@ -3,6 +3,7 @@
 A scalable and high-performance URL shortening service built with **FastAPI**, **SQLModel**, **PostgreSQL**, and **Alembic**, designed to handle high concurrency while keeping a maintainable and modular codebase.
 
 This project is a fork of [mhhasani/url-shortener](https://github.com/mhhasani/url-shortener), extended with additional features for learning and resume purposes.
+
 ---
 
 ## 🧩 Features
@@ -10,6 +11,7 @@ This project is a fork of [mhhasani/url-shortener](https://github.com/mhhasani/u
 * **Create short URLs** – `POST /shorten`(with optional custom alias)
 * **Redirect to original URLs** – `GET /r/{short_code}`
 * **Track visit statistics** – `GET /stats/{short_code}`
+* **Redis caching layer** – Cache-Aside pattern with 300s TTL for fast redirects
 * **Async queue-based visit processing** for high concurrency
 * **Connection pooling** for PostgreSQL
 * **Custom async logging middleware** for observability
@@ -26,9 +28,24 @@ This project is a fork of [mhhasani/url-shortener](https://github.com/mhhasani/u
 - Fully backward compatible: omit `custom_alias` to use auto-generation
 - Covered by 5 new integration tests
 
+### Redis Caching Layer
+- **Cache-Aside pattern** with key format `short:url:{short_code}`, default TTL 300s
+- Cache warming on short URL creation (`set_cached_url`)
+- Cache invalidation on expiration (`delete_cached_url`)
+- Visit tracking on cache hits (query DB for id, enqueue visit)
+- Graceful degradation: Redis failures are caught and don't break the redirect flow
+- Redis service added to `docker-compose.yml`
+- Connection pool configured in `app/core/redis.py` (with `aclose()` for lifespan management)
+- `lifespan` in `main.py` manages Redis startup/shutdown alongside visit worker
+- All concurrency tests mock Redis to avoid connection pool exhaustion
+- Covered by 6 new tests: cache hit redirect, cache hit enqueues visit, cache warming on create, expiration invalidation, Redis degradation, and end-to-end integration
+
 ---
 
 ## ⚡ Scalability Highlights
+
+* **Redis Cache**
+  Hot URLs are served from memory, reducing DB load and latency for repeated redirects.
 
 * **Async Queue & Worker**
   Visits are enqueued and processed in batches to minimize DB writes and maintain atomic `total_visits` counts.
@@ -71,6 +88,13 @@ Copy the sample environment file and adjust DB credentials if needed:
 ```bash
 cp sample.env .env
 ```
+Required variables include:
+
+DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/url_shortener
+REDIS_HOST=localhost
+REDIS_PORT=6379
+REDIS_DB=0
+
 ---
 
 ### 4️⃣ Run the database with Docker
@@ -113,8 +137,9 @@ Tests cover:
 
 * URL creation and redirection
 * Idempotent URL shortening
-* **Custom alias creation, conflict (409), and validation (422)**
+* Custom alias creation, conflict (409), and validation (422)
 * Visit tracking under high concurrency
+* Redis cache hit / miss / warming / invalidation / degradation
 * Validation of invalid URLs
 
 ---
@@ -125,6 +150,8 @@ Tests cover:
 app/
 ├── api/            # FastAPI routers
 ├── core/           # Configuration and settings
+│   ├── setting.py   # App settings (includes REDIS_HOST/PORT/DB)
+│   └── redis.py    # Redis connection pool and cache helpers
 ├── db/             # Models, async session, Alembic migrations
 ├── middleware/     # Logging middleware
 ├── utils/          # Visit queue, shortcode generator, background tasks
@@ -135,9 +162,21 @@ app/
 
 ## 🔧 Technical Details
 
+### Caching Strategy (Redis)
+
+| Aspect | Detail |
+|--------|--------|
+| Pattern | Cache-Aside |
+| Key format | `short:url:{short_code}` |
+| TTL | 300 seconds (configurable) |
+| Warm | On short URL creation via `set_cached_url` |
+| Invalidate | On expiration check via `delete_cached_url` |
+| Degrade | Exceptions caught; fallback to DB query |
+
 ### Visit Tracking
 
 * Each redirect request calls `enqueue_visit(short_url_id, client_ip)`
+* On cache hit: DB is queried for `ShortURL.id` only, then visit is enqueued
 * Background worker `visit_worker()` processes visits in batches (`BATCH_SIZE` / `BATCH_INTERVAL`)
 * `_process_batch` inserts visit records and updates `ShortURL.total_visits` atomically
 
@@ -151,6 +190,7 @@ app/
 
 * Async engine with pool size and overflow configured
 * Avoids per-request DB connection creation, improving performance under load
+* Redis connection pool managed via `aioredis.ConnectionPool` (no hard `max_connections` limit)
 
 ### Logging
 
@@ -166,3 +206,4 @@ app/
 * Focus on modularity and maintainability; background tasks handle heavy workloads
 * Main request path is lightweight; batch processing, logging, and analytics happen in background tasks
 * Custom alias is purely additive — all existing behavior unchanged
+* Redis caching is transparent to the API consumer — no change to request/response contracts
